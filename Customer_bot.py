@@ -55,16 +55,21 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     category = query.data[4:]
     items = MENU.get(category, [])
-    keyboard = [
-        [InlineKeyboardButton(
-            f"{item['name']}  —  {item['price']:.2f} EGP",
-            callback_data=f"add_{item['id']}"
-        )]
-        for item in items
-    ]
+
+    from database import get_unavailable_items
+    unavailable = await get_unavailable_items()
+
+    keyboard = []
+    for item in items:
+        status = "❌" if item["id"] in unavailable else "✅"
+        keyboard.append([InlineKeyboardButton(
+            f"{status} {item['name']}  —  {item['price']:.2f} EGP",
+            callback_data=f"add_{item['id']}" if item["id"] not in unavailable else "unavailable"
+        )])
     keyboard.append([InlineKeyboardButton("⬅️ Back to Menu", callback_data="show_menu")])
+
     await query.edit_message_text(
-        f"{category}\n\nTap an item to add it to your cart:",
+        f"{category}\n\nTap an available item to add it to your cart:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -235,4 +240,8 @@ def build_customer_app():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_notes))
     # Make sure customer bot does NOT handle staff callbacks
     # (remove any wildcard callback handler if present)
+    app.add_handler(CallbackQueryHandler(
+        lambda u, c: u.callback_query.answer("❌ This item is currently unavailable.", show_alert=True),
+        pattern="^unavailable$"
+    ))
     return app
