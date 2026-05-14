@@ -109,3 +109,114 @@ async def get_unavailable_items() -> set:
         ) as cur:
             rows = await cur.fetchall()
             return {row[0] for row in rows}
+
+async def create_group_order(host_id: int, host_username: str) -> str:
+    """Create a new group order session, returns the group_code."""
+    import random, string
+    group_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS group_orders (
+                group_code   TEXT PRIMARY KEY,
+                host_id      INTEGER NOT NULL,
+                host_username TEXT,
+                status       TEXT DEFAULT 'open',
+                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS group_order_members (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_code  TEXT NOT NULL,
+                user_id     INTEGER NOT NULL,
+                username    TEXT,
+                items       TEXT DEFAULT '[]',
+                confirmed   INTEGER DEFAULT 0
+            )
+        """)
+        await db.commit()
+        await db.execute(
+            "INSERT INTO group_orders (group_code, host_id, host_username) VALUES (?, ?, ?)",
+            (group_code, host_id, host_username)
+        )
+        await db.execute(
+            "INSERT INTO group_order_members (group_code, user_id, username) VALUES (?, ?, ?)",
+            (group_code, host_id, host_username)
+        )
+        await db.commit()
+    return group_code
+
+
+async def get_group_order(group_code: str) -> dict | None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS group_orders (
+                group_code   TEXT PRIMARY KEY,
+                host_id      INTEGER NOT NULL,
+                host_username TEXT,
+                status       TEXT DEFAULT 'open',
+                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS group_order_members (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_code  TEXT NOT NULL,
+                user_id     INTEGER NOT NULL,
+                username    TEXT,
+                items       TEXT DEFAULT '[]',
+                confirmed   INTEGER DEFAULT 0
+            )
+        """)
+        await db.commit()
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM group_orders WHERE group_code = ?", (group_code,)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return None
+            order = dict(row)
+        async with db.execute(
+            "SELECT * FROM group_order_members WHERE group_code = ?", (group_code,)
+        ) as cur:
+            rows = await cur.fetchall()
+            order["members"] = []
+            for r in rows:
+                m = dict(r)
+                m["items"] = json.loads(m["items"])
+                order["members"].append(m)
+        return order
+
+
+async def join_group_order(group_code: str, user_id: int, username: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT id FROM group_order_members WHERE group_code = ? AND user_id = ?",
+            (group_code, user_id)
+        ) as cur:
+            exists = await cur.fetchone()
+        if not exists:
+            await db.execute(
+                "INSERT INTO group_order_members (group_code, user_id, username) VALUES (?, ?, ?)",
+                (group_code, user_id, username)
+            )
+            await db.commit()
+
+
+async def update_member_items(group_code: str, user_id: int, items: list):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE group_order_members SET items = ?, confirmed = 1 WHERE group_code = ? AND user_id = ?",
+            (json.dumps(items), group_code, user_id)
+        )
+        await db.commit()
+
+
+async def close_group_order(group_code: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE group_orders SET status = 'closed' WHERE group_code = ?",
+            (group_code,)
+        )
+        await db.commit()
