@@ -184,9 +184,61 @@ def build_staff_app() -> Application:
 
     # 👇 ADD THIS LINE
     app.add_handler(MessageHandler(filters.ALL, debug_chat_id))
+    app.add_handler(CommandHandler("menu", manage_menu))
+    app.add_handler(CallbackQueryHandler(toggle_item, pattern="^toggleitem_"))
+    app.add_handler(CallbackQueryHandler(lambda u, c: u.callback_query.answer(), pattern="^noop$"))
 
     return app
 from telegram.ext import MessageHandler, filters
 
 async def debug_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("CHAT ID:", update.effective_chat.id)
+
+async def manage_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all menu items as buttons to toggle availability."""
+    from menu import MENU
+    from database import get_unavailable_items
+    unavailable = await get_unavailable_items()
+
+    keyboard = []
+    for category, items in MENU.items():
+        keyboard.append([InlineKeyboardButton(f"── {category} ──", callback_data="noop")])
+        for item in items:
+            status = "❌ OFF" if item["id"] in unavailable else "✅ ON"
+            keyboard.append([InlineKeyboardButton(
+                f"{status}  |  {item['name']}",
+                callback_data=f"toggleitem_{item['id']}"
+            )])
+
+    await update.message.reply_text(
+        "📋 Menu Availability\nTap any item to toggle it on/off:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def toggle_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    item_id = query.data[len("toggleitem_"):]
+    from database import toggle_item_availability, get_unavailable_items
+    from menu import MENU, get_item_by_id
+    new_state = await toggle_item_availability(item_id)
+    item = get_item_by_id(item_id)
+
+    status_text = "✅ now AVAILABLE" if new_state else "❌ now UNAVAILABLE"
+    await query.answer(f"{item['name']} is {status_text}", show_alert=True)
+
+    # Refresh the menu message
+    unavailable = await get_unavailable_items()
+    keyboard = []
+    for category, items in MENU.items():
+        keyboard.append([InlineKeyboardButton(f"── {category} ──", callback_data="noop")])
+        for i in items:
+            status = "❌ OFF" if i["id"] in unavailable else "✅ ON"
+            keyboard.append([InlineKeyboardButton(
+                f"{status}  |  {i['name']}",
+                callback_data=f"toggleitem_{i['id']}"
+            )])
+
+    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
